@@ -887,17 +887,41 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         self.onmessage = function(e) {
           const code = e.data;
           
+          const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB per message
+          const MAX_MESSAGES = 100; // Max 100 log calls
+          let messageCount = 0;
+          
           const format = (arg) => {
             if (arg === undefined) return 'undefined';
             if (arg === null) return 'null';
             if (typeof arg === 'object') {
-              try { return JSON.stringify(arg, null, 2); } 
+              try { 
+                const str = JSON.stringify(arg, null, 2);
+                // Truncate large objects
+                if (str.length > MAX_OUTPUT_SIZE) {
+                  return str.substring(0, MAX_OUTPUT_SIZE) + '\\n... [Output truncated - too large]';
+                }
+                return str;
+              } 
               catch(e) { return String(arg); }
             }
-            return String(arg);
+            const str = String(arg);
+            // Truncate large strings
+            if (str.length > MAX_OUTPUT_SIZE) {
+              return str.substring(0, MAX_OUTPUT_SIZE) + '\\n... [Output truncated - ' + str.length + ' characters total]';
+            }
+            return str;
           };
 
           const log = (level, args) => {
+            messageCount++;
+            if (messageCount > MAX_MESSAGES) {
+              if (messageCount === MAX_MESSAGES + 1) {
+                self.postMessage({ type: 'output', level, content: '⚠️ Output limit reached (100 messages). Further output suppressed.' });
+              }
+              return;
+            }
+            
             const msg = args.map(format).join(' ');
             self.postMessage({ type: 'output', level, content: msg });
           };
