@@ -529,7 +529,7 @@ const LanguageSelector = ({ current, onChange }: { current: Language, onChange: 
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-56 bg-[#1E1F20] border border-[#333] rounded-xl shadow-2xl z-50 overflow-hidden glass-panel animate-in fade-in zoom-in-95 duration-100 origin-top-left">
+        <div className="absolute top-full left-0 mt-2 w-56 bg-[#1E1F20] border border-[#333] rounded-xl shadow-2xl z-[9999] overflow-hidden glass-panel animate-in fade-in zoom-in-95 duration-100 origin-top-left">
           <div className="p-1.5 space-y-0.5">
             {LANGUAGES.map((lang) => (
               <button
@@ -646,6 +646,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
 
   // Track active intervals for cleanup
   const activeIntervals = useRef<number[]>([]);
+  const workerRef = useRef<Worker | null>(null);
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -867,6 +868,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
     setIsRunning(true);
     setXp(prev => prev + 5);
     setRenderKey(k => k + 1);
+    setOutput([]); // Clear previous output
 
     if (language === 'react') {
       const doc = generateReactTemplate(code);
@@ -876,57 +878,86 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
     }
 
     if (language === 'javascript') {
-      // Cleanup previous intervals to prevent loops from stacking
-      activeIntervals.current.forEach(id => window.clearInterval(id));
-      activeIntervals.current = [];
-
-      setOutput([]); // Clear previous output
-
-      // Define logging callback to update React state from inside new Function
-      const logCallback = (level: string, args: any[]) => {
-        const formatted = args.map(arg => {
-          if (arg === undefined) return 'undefined';
-          if (arg === null) return 'null';
-          if (typeof arg === 'object') return JSON.stringify(arg, null, 2);
-          return String(arg);
-        }).join(' ');
-
-        setOutput(prev => {
-          if (prev.length > 1000) return prev; // Safety limit
-          return [...prev, formatted];
-        });
-      };
-
-      // Define interval/timeout wrappers to track IDs for cleanup
-      const trackInterval = (handler: TimerHandler, timeout?: number) => {
-        const id = window.setInterval(handler, timeout);
-        activeIntervals.current.push(id);
-        return id;
-      };
-
-      try {
-        // We use new Function to create a scope where we can inject our custom console and setInterval
-        // Note: 'console' and 'setInterval' are shadowed in the generated function
-        const wrappedFn = new Function(
-          'console',
-          'setInterval',
-          code
-        );
-
-        const customConsole = {
-          log: (...args: any[]) => logCallback('log', args),
-          error: (...args: any[]) => logCallback('error', args),
-          warn: (...args: any[]) => logCallback('warn', args),
-          info: (...args: any[]) => logCallback('info', args)
-        };
-
-        wrappedFn(customConsole, trackInterval);
-        // We do NOT set output here because logCallback handles it async
-      } catch (e: any) {
-        setOutput(prev => [...prev, "Error: " + e.message]);
-      } finally {
-        setIsRunning(false);
+      // Terminate previous worker if exists
+      if (workerRef.current) {
+        workerRef.current.terminate();
       }
+
+      const workerScript = `
+        self.onmessage = function(e) {
+          const code = e.data;
+          
+          const format = (arg) => {
+            if (arg === undefined) return 'undefined';
+            if (arg === null) return 'null';
+            if (typeof arg === 'object') {
+              try { return JSON.stringify(arg, null, 2); } 
+              catch(e) { return String(arg); }
+            }
+            return String(arg);
+          };
+
+          const log = (level, args) => {
+            const msg = args.map(format).join(' ');
+            self.postMessage({ type: 'output', level, content: msg });
+          };
+
+          const consoleProxy = {
+            log: (...args) => log('log', args),
+            error: (...args) => log('error', args),
+            warn: (...args) => log('warn', args),
+            info: (...args) => log('info', args)
+          };
+
+          try {
+            const fn = new Function('console', code);
+            fn(consoleProxy);
+            self.postMessage({ type: 'done' });
+          } catch (e) {
+            self.postMessage({ type: 'error', content: e.toString() });
+          }
+        };
+      `;
+
+      const blob = new Blob([workerScript], { type: 'application/javascript' });
+      const worker = new Worker(URL.createObjectURL(blob));
+      workerRef.current = worker;
+
+      // Hard timeout of 10 seconds
+      const timeoutId = setTimeout(() => {
+        if (workerRef.current === worker) {
+          worker.terminate();
+          workerRef.current = null;
+          setOutput(prev => [...prev, "\n⚠️ Error: Time Limit Exceeded (10s)"]);
+          setIsRunning(false);
+        }
+      }, 10000);
+
+      worker.onmessage = (e) => {
+        const { type, content } = e.data;
+        if (type === 'output') {
+          setOutput(prev => {
+            if (prev.length > 1000) return prev;
+            return [...prev, content];
+          });
+        } else if (type === 'error') {
+          setOutput(prev => [...prev, "Runtime Error: " + content]);
+          setIsRunning(false);
+          clearTimeout(timeoutId);
+        } else if (type === 'done') {
+          // Main execution finished, but we keep worker alive for a bit in case of async
+          // For UI purposes, we stop the spinner
+          setIsRunning(false);
+        }
+      };
+
+      worker.onerror = (e) => {
+        setOutput(prev => [...prev, "Worker Error: " + e.message]);
+        setIsRunning(false);
+        clearTimeout(timeoutId);
+      };
+
+      worker.postMessage(code);
       return;
     }
 
@@ -943,12 +974,21 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         prompt = `Act as a ${language} compiler. Code:\n${code}\nReturn ONLY the output (stdout/stderr).`;
       }
 
-      const result = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-      });
+      // 15s Timeout for AI
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Time Limit Exceeded (15s)")), 15000)
+      );
+
+      const result: any = await Promise.race([
+        ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt
+        }),
+        timeoutPromise
+      ]);
+
       const rawText = result.text || "";
-      setOutput([`CMD: Executing ${language}...`, ...rawText.split('\n').filter(l => !l.startsWith('```'))]);
+      setOutput([`CMD: Executing ${language}...`, ...rawText.split('\n').filter((l: string) => !l.startsWith('```'))]);
     } catch (e: any) {
       setOutput([`Error: ${e.message}`]);
     } finally {
