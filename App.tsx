@@ -606,6 +606,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
   const [quizAnswers, setQuizAnswers] = useState<number[]>([]); // Track user's answers
   const [hasSelectedDifficulty, setHasSelectedDifficulty] = useState(false);
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
+  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
 
   // Resizing State
   const [splitRatio, setSplitRatio] = useState(40); // Chat Width %
@@ -765,10 +766,13 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
   }, [resizingDir]);
 
   const clearChat = () => {
-    if (window.confirm("Are you sure you want to clear the chat history?")) {
-      const initMsg: ChatMessage[] = [{ id: 'init', role: 'model', text: "Welcome to **Codvora**. \n\nI am your Codvora companion. How can I assist you in your engineering journey today?" }];
-      setChatHistory(initMsg);
-    }
+    setIsClearModalOpen(true);
+  };
+
+  const confirmClearChat = () => {
+    const initMsg: ChatMessage[] = [{ id: 'init', role: 'model', text: "Welcome to **Codvora**. \n\nI am your Codvora companion. How can I assist you in your engineering journey today?" }];
+    setChatHistory(initMsg);
+    setIsClearModalOpen(false);
   };
 
   const getAI = () => {
@@ -1651,6 +1655,34 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
           className="fixed inset-0 z-[9999]"
           style={{ cursor: resizingDir === 'horizontal' ? 'col-resize' : 'row-resize' }}
         />
+      )}
+
+      {/* Clear Chat Confirmation Modal */}
+      {isClearModalOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-[#1E1E1E] border border-[#333] rounded-xl shadow-2xl max-w-md w-full overflow-hidden transform transition-all scale-100 opacity-100">
+            <div className="p-6">
+              <h3 className="text-xl font-semibold text-white mb-2">Clear Chat History?</h3>
+              <p className="text-gray-400 text-sm leading-relaxed">
+                Are you sure you want to clear the entire conversation? This action cannot be undone.
+              </p>
+            </div>
+            <div className="bg-[#131314] px-6 py-4 flex items-center justify-end gap-3 border-t border-[#333]">
+              <button
+                onClick={() => setIsClearModalOpen(false)}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-300 hover:text-white hover:bg-[#333] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmClearChat}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors"
+              >
+                Clear History
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
