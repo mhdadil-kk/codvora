@@ -11,6 +11,7 @@ import { GoogleGenAI } from "@google/genai";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Navigate } from 'react-router-dom';
 import LandingPage from './LandingPage';
 import Documentation from './Documentation';
+import NotFound from './NotFound';
 
 declare global {
   interface Window {
@@ -1772,6 +1773,7 @@ export default function App() {
         <Route path="/docs" element={<DocumentationRoute />} />
         <Route path="/editor" element={<Navigate to="/editor/javascript" replace />} />
         <Route path="/editor/:lang" element={<EditorWrapper />} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
   );
