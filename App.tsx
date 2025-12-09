@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Terminal, Play, Bot, Code2, Sparkles, Trophy, Flame,
-  MessageSquare, Copy, Menu, Plus, Image as ImageIcon,
-  Mic, Send, Loader2, ChevronRight, Eraser, Settings,
-  Database, LayoutTemplate, Hexagon, Globe, Monitor, RefreshCw,
-  GripHorizontal, ChevronDown, Atom, FileJson, FileCode, Coffee, Check,
-  BookOpen, Briefcase, BrainCircuit, Layers, Trash2
+  Terminal, Play, Bot, Code2, Sparkles, Trophy,
+  MessageSquare, Plus, Wand2,
+  Mic, Send, Loader2, Eraser,
+  GripHorizontal, BookOpen, Briefcase, BrainCircuit, Layers, Trash2
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { BrowserRouter, Routes, Route, useParams, useNavigate, Navigate } from 'react-router-dom';
@@ -13,552 +11,16 @@ import LandingPage from './LandingPage';
 import Documentation from './Documentation';
 import NotFound from './NotFound';
 
-declare global {
-  interface Window {
-    Prism: any;
-    monaco: any;
-    require: any;
-  }
-}
-
-// --- Types ---
-
-type Language = 'javascript' | 'python' | 'java' | 'cpp' | 'react' | 'nodejs' | 'mongodb';
-type ViewMode = 'editor' | 'quiz';
-
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'model' | 'system';
-  text: string;
-}
-
-interface QuizQuestion {
-  question: string;
-  options: string[];
-  correctIndex: number;
-}
-
-// --- Constants & Templates ---
-
-const LANGUAGES = [
-  { id: 'javascript', label: 'JavaScript', icon: <FileJson className="w-4 h-4 text-yellow-400" />, ext: 'js', prismLang: 'javascript' },
-  { id: 'react', label: 'React', icon: <Atom className="w-4 h-4 text-cyan-400" />, ext: 'jsx', prismLang: 'jsx' },
-  { id: 'nodejs', label: 'Node.js', icon: <Hexagon className="w-4 h-4 text-green-500" />, ext: 'js', prismLang: 'javascript' },
-  { id: 'mongodb', label: 'MongoDB', icon: <Database className="w-4 h-4 text-green-400" />, ext: 'js', prismLang: 'javascript' },
-  { id: 'python', label: 'Python', icon: <FileCode className="w-4 h-4 text-blue-400" />, ext: 'py', prismLang: 'python' },
-  { id: 'java', label: 'Java', icon: <Coffee className="w-4 h-4 text-orange-400" />, ext: 'java', prismLang: 'java' },
-  { id: 'cpp', label: 'C++', icon: <Code2 className="w-4 h-4 text-blue-600" />, ext: 'cpp', prismLang: 'cpp' },
-];
-
-const INITIAL_CODE: Record<Language, string> = {
-  javascript: `// JavaScript Playground
-console.log("Hello World");`,
-
-  python: `# Python 3.10 Environment
-def process_data(data):
-    return [x * 2 for x in data]
-
-numbers = [1, 2, 3, 4, 5]
-print(f"Original: {numbers}")
-print(f"Processed: {process_data(numbers)}")`,
-
-  java: `public class Main {
-    public static void main(String[] args) {
-        System.out.println("Java Runtime Environment Active");
-        
-        int[] numbers = {10, 20, 30};
-        for(int n : numbers) {
-            System.out.println("Processing: " + n);
-        }
-    }
-}`,
-
-  cpp: `#include <iostream>
-#include <vector>
-
-int main() {
-    std::cout << "C++ Compiler Initialized" << std::endl;
-    std::vector<int> v = {1, 2, 3};
-    
-    for(int i : v) {
-        std::cout << "Vector Element: " << i << std::endl;
-    }
-    return 0;
-}`,
-
-  react: `import React, { useState } from 'react';
-
-export default function App() {
-  const [count, setCount] = useState(0);
-
-  return (
-    <div style={{ 
-      padding: '40px', 
-      fontFamily: 'sans-serif',
-      textAlign: 'center',
-      background: '#f0f4f8',
-      borderRadius: '12px',
-      height: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center'
-    }}>
-      <h1 style={{ color: '#1a202c' }}>React Preview ⚛️</h1>
-      <p>Edit code and click "Preview"!</p>
-      
-      <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-        <button onClick={() => setCount(c => c - 1)}>-</button>
-        <span style={{ fontSize: '24px', fontWeight: 'bold' }}>{count}</span>
-        <button onClick={() => setCount(c => c + 1)}>+</button>
-      </div>
-    </div>
-  );
-}`,
-
-  nodejs: `const os = require('os');
-
-console.log("Starting Node.js process...");
-console.log("Platform: " + os.platform());
-console.log("Node Version: v18.16.0");
-
-// Try typing: console.log(process.memoryUsage())
-`,
-
-  mongodb: `use production_db;
-
-db.products.insertOne({ 
-    name: "Gaming Laptop", 
-    price: 1299,
-    tags: ["tech", "gaming"]
-});
-
-print("Data inserted. Type commands below to query.");
-// Try typing: db.products.find()`
-};
-
-// --- Helper Components ---
-
-const MonacoEditor = React.memo(({
-  code,
-  language,
-  onChange
-}: {
-  code: string,
-  language: Language,
-  onChange: (v: string) => void
-}) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<any>(null);
-  const debounceRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (!containerRef.current || !window.require) return;
-
-    const loadMonaco = () => {
-      window.require(['vs/editor/editor.main'], () => {
-        if (editorRef.current) return; // Already initialized
-
-        const monacoLang = language === 'react' ? 'javascript' :
-          language === 'nodejs' ? 'javascript' :
-            language === 'mongodb' ? 'javascript' :
-              language;
-
-        // Optimize compiler options for performance
-        if (window.monaco) {
-          const jsDefaults = window.monaco.languages.typescript.javascriptDefaults;
-          jsDefaults.setDiagnosticsOptions({
-            noSemanticValidation: true,
-            noSyntaxValidation: false,
-          });
-
-          if (monacoLang === 'javascript') {
-            jsDefaults.setCompilerOptions({
-              jsx: window.monaco.languages.typescript.JsxEmit.React,
-              allowNonTsExtensions: true,
-              target: window.monaco.languages.typescript.ScriptTarget.ESNext,
-              checkJs: false,
-            });
-          }
-        }
-
-        editorRef.current = window.monaco.editor.create(containerRef.current, {
-          value: code,
-          language: monacoLang,
-          theme: 'vs-dark',
-          automaticLayout: false, // We handle layout manually for better control
-          minimap: { enabled: false },
-          scrollBeyondLastLine: false,
-          fontSize: 14,
-          fontFamily: "'JetBrains Mono', 'Courier New', monospace",
-          lineNumbers: 'on',
-          roundedSelection: false,
-          padding: { top: 16, bottom: 16 },
-          renderLineHighlight: 'all',
-          scrollbar: {
-            vertical: 'visible',
-            horizontal: 'visible',
-            verticalScrollbarSize: 12,
-            horizontalScrollbarSize: 12,
-          }
-        });
-
-        // Immediate change handler for smooth typing
-        editorRef.current.onDidChangeModelContent(() => {
-          const newVal = editorRef.current.getValue();
-          isTypingRef.current = true;
-          onChange(newVal);
-
-          // Clear typing flag after user stops typing
-          if (debounceRef.current) clearTimeout(debounceRef.current);
-          debounceRef.current = setTimeout(() => {
-            isTypingRef.current = false;
-          }, 300);
-        });
-
-        // CRITICAL FIX: Force layout updates to handle container resizing during route transitions
-        // We poll for a short duration to ensure the editor snaps to the correct size once the container is stable.
-        const forceLayout = () => {
-          if (editorRef.current) {
-            editorRef.current.layout();
-          }
-        };
-
-        // Immediate layout
-        forceLayout();
-
-        // Staggered layout updates to catch transition end
-        setTimeout(forceLayout, 50);
-        setTimeout(forceLayout, 100);
-        setTimeout(forceLayout, 300);
-        setTimeout(forceLayout, 500);
-      });
-    };
-
-    if (typeof window.require === 'function') {
-      loadMonaco();
-    } else {
-      const interval = setInterval(() => {
-        if (typeof window.require === 'function') {
-          clearInterval(interval);
-          loadMonaco();
-        }
-      }, 100);
-      return () => clearInterval(interval);
-    }
-
-    return () => {
-      if (editorRef.current) {
-        editorRef.current.dispose();
-        editorRef.current = null;
-      }
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, []); // Empty dependency array - we want this to run ONCE per mount (key prop handles re-mounts)
-
-  // Robust Resize Observer
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (editorRef.current) {
-        editorRef.current.layout();
-      }
-    });
-
-    resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
-  }, []); // Run once to attach observer
-
-  const isTypingRef = useRef(false);
-  const lastCodeRef = useRef(code);
-
-  // Update language only (don't interfere with typing)
-  useEffect(() => {
-    if (editorRef.current && window.monaco) {
-      const monacoLang = language === 'react' ? 'javascript' :
-        language === 'nodejs' ? 'javascript' :
-          language === 'mongodb' ? 'javascript' :
-            language;
-
-      const model = editorRef.current.getModel();
-      if (model) {
-        window.monaco.editor.setModelLanguage(model, monacoLang);
-      }
-    }
-  }, [language]); // Only run when language changes
-
-  // Handle external code updates (e.g., from language switching)
-  useEffect(() => {
-    if (editorRef.current && !isTypingRef.current) {
-      const currentValue = editorRef.current.getValue();
-
-      // Only update if code changed externally (not from user typing)
-      if (code !== currentValue && code !== lastCodeRef.current) {
-        const position = editorRef.current.getPosition();
-        editorRef.current.setValue(code);
-        if (position) {
-          editorRef.current.setPosition(position);
-        }
-      }
-    }
-    lastCodeRef.current = code;
-  }, [code]);
-
-  return <div ref={containerRef} className="w-full h-full bg-[#1E1E1E] overflow-hidden" />;
-});
-
-const BrowserPreview = ({ srcDoc, keyProp }: { srcDoc: string, keyProp: number }) => (
-  <div className="flex flex-col h-full bg-white overflow-hidden">
-    <div className="h-10 bg-[#f0f0f0] border-b border-[#ccc] flex items-center px-4 gap-3">
-      <div className="flex gap-1.5">
-        <div className="w-3 h-3 rounded-full bg-[#FF5F57] border border-[#E0443E]"></div>
-        <div className="w-3 h-3 rounded-full bg-[#FEBC2E] border border-[#D89E24]"></div>
-        <div className="w-3 h-3 rounded-full bg-[#28C840] border border-[#1AAB29]"></div>
-      </div>
-      <div className="flex-1 bg-white h-7 rounded flex items-center px-3 text-xs text-[#555] border border-[#ddd] shadow-sm">
-        localhost:3000
-      </div>
-      <RefreshCw className="w-4 h-4 text-[#666]" />
-    </div>
-    <iframe
-      key={keyProp}
-      srcDoc={srcDoc}
-      className="w-full flex-1 border-none bg-white"
-      title="Preview"
-      sandbox="allow-scripts allow-same-origin allow-modals allow-popups allow-forms"
-    />
-  </div>
-);
-
-const CommandPrompt = ({
-  lines,
-  language,
-  onInput,
-  isProcessing
-}: {
-  lines: string[],
-  language: Language,
-  onInput: (cmd: string) => void,
-  isProcessing: boolean
-}) => {
-  const [inputVal, setInputVal] = useState('');
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Determine the prompt path display
-  const promptPath = language === 'mongodb' ? '>' : 'C:\\Users\\Dev\\project>';
-
-  useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [lines]);
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !isProcessing) {
-      onInput(inputVal);
-      setInputVal('');
-    }
-  };
-
-  return (
-    <div className="h-full flex flex-col bg-[#0C0C0C] font-[Consolas,Monaco,monospace] text-[#CCCCCC] text-sm leading-6 border-t border-[#333] cursor-text p-4">
-      <div className="flex-1 overflow-y-auto scrollbar-hide" onClick={() => document.getElementById('shell-input')?.focus()}>
-        <div className="mb-4 text-gray-400 select-none">
-          {language === 'mongodb' ? 'MongoDB Shell version v5.0.3' : 'Microsoft Windows [Version 10.0.19045]'}
-          <br />(c) {new Date().getFullYear()} Corporation. All rights reserved.
-        </div>
-
-        {lines.map((line, i) => (
-          <div key={i} className="break-all whitespace-pre-wrap">
-            {line.startsWith('CMD:') ? (
-              <span className="text-[#E3E3E3]">
-                <span className="text-gray-500 mr-2 select-none">{promptPath}</span>
-                {line.replace('CMD:', '')}
-              </span>
-            ) : (
-              <span className="text-gray-300">{line}</span>
-            )}
-          </div>
-        ))}
-
-        <div className="flex items-center mt-2">
-          <span className="text-gray-500 mr-2 select-none shrink-0">{promptPath}</span>
-          <input
-            id="shell-input"
-            value={inputVal}
-            onChange={(e) => setInputVal(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isProcessing}
-            autoFocus
-            className="flex-1 bg-transparent border-none outline-none p-0 text-[#E3E3E3] font-[inherit]"
-            autoComplete="off"
-            spellCheck="false"
-          />
-        </div>
-        <div ref={scrollRef} />
-      </div>
-    </div>
-  );
-};
-
-const CodeBlock: React.FC<{ code: string, lang: string }> = ({ code, lang }) => {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const highlightedCode = window.Prism && window.Prism.languages[lang]
-    ? window.Prism.highlight(code, window.Prism.languages[lang], lang)
-    : code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-  return (
-    <div className="my-4 rounded-lg border border-[#444746] overflow-hidden bg-[#1E1F20] shadow-sm group/code">
-      <div className="bg-[#2A2B2D] px-4 py-2 flex justify-between items-center border-b border-[#444746]">
-        <span className="text-xs text-[#C4C7C5] font-mono lowercase">{lang || 'text'}</span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 text-[#C4C7C5] hover:text-white transition-colors"
-        >
-          {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-          <span className="text-[11px] font-medium">{copied ? 'Copied' : 'Copy'}</span>
-        </button>
-      </div>
-      <div className="p-4 overflow-x-auto bg-[#1E1F20]">
-        <pre
-          className={`text-sm font-mono leading-relaxed whitespace-pre language-${lang}`}
-          style={{ margin: 0, background: 'transparent', padding: 0 }}
-          dangerouslySetInnerHTML={{ __html: highlightedCode }}
-        />
-      </div>
-    </div>
-  );
-};
-
-const MarkdownText = ({ content }: { content: string }) => {
-  const parseInline = (text: string) => {
-    const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('`') && part.endsWith('`')) {
-        return <code key={i} className="bg-[#2A2B2D] text-[#E3E3E3] px-1.5 py-0.5 rounded text-[13px] font-mono border border-[#444746]">{part.slice(1, -1)}</code>;
-      }
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={i} className="font-bold text-white">{part.slice(2, -2)}</strong>;
-      }
-      if (part.startsWith('*') && part.endsWith('*')) {
-        return <em key={i} className="italic text-gray-300">{part.slice(1, -1)}</em>;
-      }
-      return part;
-    });
-  };
-
-  const blocks = content.split(/(```[\s\S]*?```)/g);
-
-  return (
-    <div className="text-[15px] leading-7 text-[#E3E3E3] font-normal space-y-4">
-      {blocks.map((block, index) => {
-        if (block.startsWith('```')) {
-          const lines = block.split('\n');
-          const lang = lines[0].replace('```', '').trim();
-          const code = lines.slice(1, -1).join('\n');
-          return <CodeBlock key={index} code={code} lang={lang} />;
-        }
-
-        // Split by double newline for paragraphs
-        const paragraphs = block.split(/\n\n+/);
-
-        return (
-          <div key={index} className="space-y-4">
-            {paragraphs.map((para, pIdx) => {
-              const trimmed = para.trim();
-              if (!trimmed) return null;
-
-              // Header Detection
-              if (trimmed.startsWith('#')) {
-                const level = trimmed.match(/^#+/)?.[0].length || 1;
-                const text = trimmed.replace(/^#+\s*/, '');
-                const Component = level === 1 ? 'h1' : level === 2 ? 'h2' : 'h3';
-                const classes = level === 1 ? "text-2xl font-bold text-white mb-3"
-                  : level === 2 ? "text-xl font-bold text-white mb-2 mt-4"
-                    : "text-lg font-semibold text-white mb-2 mt-3";
-                return React.createElement(Component, { key: pIdx, className: classes }, parseInline(text));
-              }
-
-              // List Detection
-              const lines = trimmed.split('\n');
-              const isListBlock = lines.every(l => /^[*-] |^\d+\. /.test(l.trim()));
-
-              if (isListBlock || (lines.length > 1 && /^[*-] /.test(lines[0]))) {
-                return (
-                  <ul key={pIdx} className="list-disc pl-5 space-y-1 text-gray-300 marker:text-gray-500">
-                    {lines.map((line, lIdx) => {
-                      const content = line.replace(/^[*-] |^\d+\. /, '');
-                      return <li key={lIdx}>{parseInline(content)}</li>;
-                    })}
-                  </ul>
-                );
-              }
-
-              return <p key={pIdx}>{parseInline(trimmed)}</p>;
-            })}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
-const LanguageSelector = ({ current, onChange }: { current: Language, onChange: (l: Language) => void }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setIsOpen(false);
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, []);
-
-  const activeLang = LANGUAGES.find(l => l.id === current);
-
-  return (
-    <div className="relative" ref={wrapperRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 bg-[#1E1F20] hover:bg-[#2A2B2D] text-[#E3E3E3] px-3 py-2 rounded-lg transition-colors border border-[#333]"
-      >
-        {activeLang?.icon}
-        <span className="text-sm font-medium">{activeLang?.label}</span>
-        <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
-
-      {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-56 bg-[#1E1F20] border border-[#333] rounded-xl shadow-2xl z-[9999] overflow-hidden glass-panel animate-in fade-in zoom-in-95 duration-100 origin-top-left">
-          <div className="p-1.5 space-y-0.5">
-            {LANGUAGES.map((lang) => (
-              <button
-                key={lang.id}
-                onClick={() => { onChange(lang.id as Language); setIsOpen(false); }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${current === lang.id
-                  ? 'bg-blue-500/20 text-blue-400'
-                  : 'text-gray-400 hover:bg-[#2A2B2D] hover:text-white'
-                  }`}
-              >
-                <span className="shrink-0">{lang.icon}</span>
-                <span className="flex-1 text-left">{lang.label}</span>
-                {current === lang.id && <Check className="w-4 h-4" />}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
+import { Language, ViewMode, ChatMessage, QuizQuestion } from './src/types';
+import { INITIAL_CODE } from './src/constants.tsx';
+import MonacoEditor from './src/components/MonacoEditor';
+import BrowserPreview from './src/components/BrowserPreview';
+import ConsolePanel from './src/components/ConsolePanel';
+import { MarkdownText } from './src/components/ChatHelpers';
+import LanguageSelector from './src/components/LanguageSelector';
+import QuizPanel from './src/components/QuizPanel';
+import { formatCode, isFormatSupported } from './src/utils/formatter';
+import FileExplorer from './src/components/FileExplorer';
 
 // --- Editor Wrapper Component ---
 
@@ -579,7 +41,26 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
   // State
   const [language, setLanguage] = useState<Language>(initialLanguage);
   const [mobileTab, setMobileTab] = useState<'code' | 'output' | 'chat'>('code');
-  const [code, setCode] = useState(INITIAL_CODE[initialLanguage]);
+
+  // Multi-file state
+  const getDefaultFilename = (lang: Language) => {
+    switch (lang) {
+      case 'javascript': return 'main.js';
+      case 'python': return 'main.py';
+      case 'java': return 'Main.java';
+      case 'cpp': return 'main.cpp';
+      case 'react': return 'App.jsx';
+      case 'nodejs': return 'index.js';
+      case 'mongodb': return 'query.js';
+      default: return 'main.txt';
+    }
+  };
+
+  const [files, setFiles] = useState<Record<string, string>>({
+    [getDefaultFilename(initialLanguage)]: INITIAL_CODE[initialLanguage]
+  });
+  const [activeFile, setActiveFile] = useState<string>(getDefaultFilename(initialLanguage));
+
   const [output, setOutput] = useState<string[]>([]);
   const [reactSrcDoc, setReactSrcDoc] = useState<string>('');
   const [renderKey, setRenderKey] = useState(0);
@@ -605,9 +86,9 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem('codelab_chat_history');
-      return saved ? JSON.parse(saved) : [{ id: 'init', role: 'model', text: "Welcome to **CodeLab**. \n\nI am your CodeLab companion. How can I assist you in your engineering journey today?" }];
+      return saved ? JSON.parse(saved) : [{ id: 'init', role: 'model', text: "Welcome to **CodeLab**. \\n\\nI am your CodeLab companion. How can I assist you in your engineering journey today?" }];
     } catch {
-      return [{ id: 'init', role: 'model', text: "Welcome to **CodeLab**. \n\nI am your CodeLab companion. How can I assist you in your engineering journey today?" }];
+      return [{ id: 'init', role: 'model', text: "Welcome to **CodeLab**. \\n\\nI am your CodeLab companion. How can I assist you in your engineering journey today?" }];
     }
   });
 
@@ -662,14 +143,12 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
       // Run Code: Ctrl + Enter
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
-        // We need to call runCode, but it's defined below. 
-        // To avoid circular dependencies or moving functions, we can trigger the button click or use a ref.
-        // Better: Move runCode definition up or use a ref to the function if possible, 
-        // but for now let's just dispatch a custom event or use a ref.
-        // actually, runCode is in scope if we define this effect after runCode.
-        // But runCode depends on state, so it changes.
-        // Let's rely on the button click for simplicity and safety, or just call the function if we move the effect down.
         document.getElementById('run-button')?.click();
+      }
+      // Format Code: Shift + Alt + F
+      if (e.shiftKey && e.altKey && e.key === 'f') {
+        e.preventDefault();
+        handleFormat();
       }
       // Clear Console: Ctrl + L
       if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
@@ -685,7 +164,20 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [files, activeFile, language]);
+  // Actually, best to define handleFormat inside the component or use refs. 
+  // Since handleFormat depends on 'code' and 'language', we need to include them or use refs.
+  // But 'handleKeyDown' is defined inside the component, so it captures the scope.
+  // However, the effect has [] deps, so it captures INITIAL state.
+  // We need to update the effect deps or use refs.
+  // Let's use refs for code/language in the effect or just add them to deps.
+  // Adding them to deps means re-attaching listener on every keystroke which is bad.
+  // Better to use refs for current state in event handlers.
+  // For now, I'll just add the button and not the shortcut to avoid complexity, or use a ref-based approach.
+  // Let's stick to just the button for now to be safe and simple.
+
 
   // Effects
   // Save Chat History to LocalStorage
@@ -700,7 +192,9 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
   // Batch language change with code update to prevent flicker
   useEffect(() => {
     const newCode = INITIAL_CODE[language];
-    setCode(newCode);
+    const newFilename = getDefaultFilename(language);
+    setFiles({ [newFilename]: newCode });
+    setActiveFile(newFilename);
     setOutput([]);
     if (language === 'react') {
       const doc = generateReactTemplate(newCode);
@@ -789,7 +283,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
   };
 
   const confirmClearChat = () => {
-    const initMsg: ChatMessage[] = [{ id: 'init', role: 'model', text: "Welcome to **Codvora**. \n\nI am your Codvora companion. How can I assist you in your engineering journey today?" }];
+    const initMsg: ChatMessage[] = [{ id: 'init', role: 'model', text: "Welcome to **Codvora**. \\n\\nI am your Codvora companion. How can I assist you in your engineering journey today?" }];
     setChatHistory(initMsg);
     setIsClearModalOpen(false);
   };
@@ -879,7 +373,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
     setOutput([]); // Clear previous output
 
     if (language === 'react') {
-      const doc = generateReactTemplate(code);
+      const doc = generateReactTemplate(files[activeFile]);
       setReactSrcDoc(doc);
       setIsRunning(false);
       return;
@@ -907,7 +401,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
                 const str = JSON.stringify(arg, null, 2);
                 // Truncate large objects
                 if (str.length > MAX_OUTPUT_SIZE) {
-                  return str.substring(0, MAX_OUTPUT_SIZE) + '\\n... [Output truncated - too large]';
+                  return str.substring(0, MAX_OUTPUT_SIZE) + '\\\\n... [Output truncated - too large]';
                 }
                 return str;
               } 
@@ -916,7 +410,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
             const str = String(arg);
             // Truncate large strings
             if (str.length > MAX_OUTPUT_SIZE) {
-              return str.substring(0, MAX_OUTPUT_SIZE) + '\\n... [Output truncated - ' + str.length + ' characters total]';
+              return str.substring(0, MAX_OUTPUT_SIZE) + '\\\\n... [Output truncated - ' + str.length + ' characters total]';
             }
             return str;
           };
@@ -960,7 +454,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         if (workerRef.current === worker) {
           worker.terminate();
           workerRef.current = null;
-          setOutput(prev => [...prev, "\n⚠️ Error: Time Limit Exceeded (10s)"]);
+          setOutput(prev => [...prev, "\\n⚠️ Error: Time Limit Exceeded (10s)"]);
           setIsRunning(false);
         }
       }, 10000);
@@ -977,8 +471,6 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
           setIsRunning(false);
           clearTimeout(timeoutId);
         } else if (type === 'done') {
-          // Main execution finished, but we keep worker alive for a bit in case of async
-          // For UI purposes, we stop the spinner
           setIsRunning(false);
         }
       };
@@ -989,7 +481,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         clearTimeout(timeoutId);
       };
 
-      worker.postMessage(code);
+      worker.postMessage(files[activeFile]);
       return;
     }
 
@@ -997,13 +489,18 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
     if (!ai) { setIsRunning(false); return; }
 
     try {
+      // Construct project context from all files
+      const projectContext = Object.entries(files)
+        .map(([name, content]) => `--- ${name} ---\n${content}`)
+        .join('\n\n');
+
       let prompt = "";
       if (language === 'mongodb') {
-        prompt = `Simulate MongoDB Shell. DB: 'production_db'. User Script:\n${code}\nReturn text output only.`;
+        prompt = `Simulate MongoDB Shell. DB: 'production_db'. User Script:\n${files[activeFile]}\nReturn text output only.`;
       } else if (language === 'nodejs') {
-        prompt = `Simulate Node.js console. Script:\n${code}\nReturn stdout only.`;
+        prompt = `Simulate Node.js console.\n\nProject Files:\n${projectContext}\n\nExecute the entry point '${activeFile}'.\nIf the file is empty, output nothing.\nIf there is code, return the stdout/stderr.\nIMPORTANT: Return ONLY the raw output text. Do NOT wrap in markdown blocks.`;
       } else {
-        prompt = `Act as a ${language} compiler. Code:\n${code}\nReturn ONLY the output (stdout/stderr).`;
+        prompt = `Act as a ${language} compiler.\n\nProject Files:\n${projectContext}\n\nCompile and run the entry point '${activeFile}'.\nReturn ONLY the output (stdout/stderr). Do NOT wrap in markdown blocks.`;
       }
 
       // 15s Timeout for AI
@@ -1020,7 +517,9 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
       ]);
 
       const rawText = result.text || "";
-      setOutput([`CMD: Executing ${language}...`, ...rawText.split('\n').filter((l: string) => !l.startsWith('```'))]);
+      // Remove markdown code blocks if present, but keep content
+      const cleanText = rawText.replace(/^```\w*\n|```$/gm, '').trim();
+      setOutput([`CMD: Executing ${language}...`, ...cleanText.split('\n')]);
     } catch (e: any) {
       setOutput([`Error: ${e.message}`]);
     } finally {
@@ -1045,13 +544,13 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         }
         // show dbs
         if (rawCmd === 'show dbs') {
-          setOutput(p => [...p, Object.keys(mongoRef.current).join('\n')]);
+          setOutput(p => [...p, Object.keys(mongoRef.current).join('\\n')]);
           return;
         }
         // show collections
         if (rawCmd === 'show collections') {
           const db = mongoRef.current[currentDbRef.current] || {};
-          setOutput(p => [...p, Object.keys(db).join('\n')]);
+          setOutput(p => [...p, Object.keys(db).join('\\n')]);
           return;
         }
         // db.collection.find()
@@ -1116,20 +615,24 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
     if (!ai) { setIsChatLoading(false); return; }
 
     try {
+      const projectContext = Object.entries(files)
+        .map(([name, content]) => `--- ${name} ---\n${content}`)
+        .join('\n\n');
+
       const prompt = `
         Act as a Senior Software Architect and Career Mentor.
         Current Language Context: ${language}.
         User Message: "${textToSend}".
-        Current Code (Reference only): 
-        \`\`\`
-        ${code}
-        \`\`\`
+        
+        Current Project Files:
+        ${projectContext}
+        
         Instructions:
         1. If the user asks to fix/debug code, provide the solution and explain the fix.
         2. If the user asks a concept question (e.g. "Explain closures", "Mock Interview"), IGNORE the current code and teach the concept deeply using structured Markdown.
         3. Use **Bold** for key terms and Headers (###) for sections.
         4. Always use code blocks with the correct language tag (e.g. \`\`\`javascript).
-        5. Be professional, concise, and helpful.
+      5. Be professional, concise, and helpful.
       `;
 
       const res = await ai.models.generateContent({
@@ -1160,25 +663,25 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
 
     try {
       const difficultyPrompts = {
-        beginner: `You are creating a quiz for ${language} beginners. Generate 5 diverse multiple-choice questions:
-        - 2 fundamental concept questions (e.g., "What is a variable?", "How does a loop work?")
+        beginner: `You are creating a quiz for ${language} beginners.Generate 5 diverse multiple - choice questions:
+      - 2 fundamental concept questions(e.g., "What is a variable?", "How does a loop work?")
         - 1 basic syntax question with simple code
-        - 1 best practices question for beginners
-        - 1 common mistake/debugging question`,
+          - 1 best practices question for beginners
+            - 1 common mistake / debugging question`,
 
-        intermediate: `You are creating interview questions for ${language} developers with 1-2 years experience. Generate 5 diverse questions:
-        - 1 theoretical concept (closures, scope, async patterns, OOP principles)
-        - 1 code output prediction (what will this code log/return?)
-        - 1 best practices/design pattern question
-        - 1 debugging scenario or problem-solving
-        - 1 language feature question (APIs, built-in methods, advanced syntax)`,
+        intermediate: `You are creating interview questions for ${language} developers with 1 - 2 years experience.Generate 5 diverse questions:
+      - 1 theoretical concept(closures, scope, async patterns, OOP principles)
+        - 1 code output prediction(what will this code log /return?)
+      - 1 best practices / design pattern question
+        - 1 debugging scenario or problem - solving
+          - 1 language feature question(APIs, built -in methods, advanced syntax)`,
 
-        advanced: `You are creating senior-level interview questions for ${language} experts. Generate 5 challenging questions:
-        - 1 architectural/design question (scalability, patterns, trade-offs)
+        advanced: `You are creating senior - level interview questions for ${language} experts.Generate 5 challenging questions:
+      - 1 architectural / design question(scalability, patterns, trade - offs)
         - 1 performance optimization or memory management
-        - 1 complex code analysis with edge cases
-        - 1 deep language internals question
-        - 1 real-world production scenario`
+          - 1 complex code analysis with edge cases
+            - 1 deep language internals question
+              - 1 real - world production scenario`
       };
 
       const chosen = level ?? quizDifficulty;
@@ -1187,15 +690,15 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         contents: `${difficultyPrompts[chosen]}
         
         Return ONLY valid JSON in this exact format:
-        [
-          {
-            "question": "Question text here (can include code blocks with \`\`\`${language})?",
-            "options": ["Option A", "Option B", "Option C", "Option D"],
-            "correctIndex": 0
-          }
-        ]
+      [
+        {
+          "question": "Question text here (can include code blocks with \`\`\`${language})?",
+          "options": ["Option A", "Option B", "Option C", "Option D"],
+          "correctIndex": 0
+        }
+      ]
         
-        Make questions diverse, practical, and interview-realistic. Vary question types - not all should be code output questions.`,
+        Make questions diverse, practical, and interview - realistic.Vary question types - not all should be code output questions.`,
         config: { responseMimeType: 'application/json' }
       });
 
@@ -1216,12 +719,18 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
     }
   };
 
+  const handleFormat = async () => {
+    if (!isFormatSupported(language)) return;
+    const formatted = await formatCode(files[activeFile], language);
+    setFiles(prev => ({ ...prev, [activeFile]: formatted }));
+  };
+
   const renderChat = () => (
     <div className="flex-1 h-full w-full flex flex-col bg-[#131314] relative">
       {/* Header */}
       <div className="h-16 sm:h-20 border-b border-[#333] flex items-center justify-between px-3 sm:px-6 bg-[#131314] shrink-0 z-10 shadow-sm">
         <div className="flex items-center gap-2 sm:gap-3">
-          <button onClick={() => navigate('/')} className="cursor-pointer hover:opacity-80 transition-opacity">
+          <button onClick={() => navigate('/')} className="cursor-pointer hover:opacity-80 transition-opacity" aria-label="Go to Home">
             <img src="/logo.png" alt="Codvora" className="h-10 sm:h-11 md:h-12 object-contain" />
           </button>
         </div>
@@ -1234,6 +743,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
             onClick={clearChat}
             className="text-gray-500 hover:text-red-400 transition-colors p-1 sm:p-0"
             title="Clear Chat History"
+            aria-label="Clear Chat History"
           >
             <Trash2 className="w-3 h-3 sm:w-4 sm:h-4" />
           </button>
@@ -1271,13 +781,13 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         )}
 
         {chatHistory.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} `}>
             {msg.role !== 'user' && (
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center mr-4 shadow-lg shrink-0 mt-1">
                 <Sparkles className="w-4 h-4 text-white" />
               </div>
             )}
-            <div className={`max-w-[90%] ${msg.role === 'user' ? 'bg-[#2A2B2D] rounded-2xl px-5 py-3 shadow-md border border-[#333]' : ''}`}>
+            <div className={`max - w - [90 %] ${msg.role === 'user' ? 'bg-[#2A2B2D] rounded-2xl px-5 py-3 shadow-md border border-[#333]' : ''} `}>
               <MarkdownText content={msg.text} />
             </div>
           </div>
@@ -1294,7 +804,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
       {/* Input Area */}
       <div className="p-6 pt-2 bg-gradient-to-t from-[#131314] to-transparent">
         <div className="bg-[#1E1F20] rounded-full flex items-center px-2 py-2 gap-2 border border-[#333] shadow-xl focus-within:border-[#555] transition-colors">
-          <div className="p-2 hover:bg-[#2A2B2D] rounded-full cursor-pointer text-gray-400 transition-colors"><Plus className="w-5 h-5" /></div>
+          <button className="p-2 hover:bg-[#2A2B2D] rounded-full cursor-pointer text-gray-400 transition-colors" aria-label="Add Attachment"><Plus className="w-5 h-5" /></button>
           <input
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
@@ -1302,13 +812,15 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
             placeholder="Ask anything to your architect..."
             className="flex-1 bg-transparent outline-none text-[15px] text-white placeholder:text-gray-500 px-2"
           />
-          <div className="p-2 hover:bg-[#2A2B2D] rounded-full cursor-pointer text-gray-400"><Mic className="w-5 h-5" /></div>
-          <div
+          <button className="p-2 hover:bg-[#2A2B2D] rounded-full cursor-pointer text-gray-400" aria-label="Voice Input"><Mic className="w-5 h-5" /></button>
+          <button
             onClick={() => sendMessage()}
             className={`p-2 rounded-full transition-all duration-200 ${chatInput.trim() ? 'bg-[#E3E3E3] text-black cursor-pointer hover:scale-105' : 'bg-[#2A2B2D] text-gray-500 cursor-default'}`}
+            aria-label="Send Message"
+            disabled={!chatInput.trim()}
           >
             <Send className="w-5 h-5" />
-          </div>
+          </button>
         </div>
         <div className="text-center mt-3">
           <span className="text-[11px] text-gray-600">Gemini can make mistakes, so double-check it.</span>
@@ -1333,16 +845,31 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
               setHasSelectedDifficulty(false);
             }}
             className="flex items-center gap-1 sm:gap-2 text-gray-400 hover:text-white px-2 sm:px-3 py-1 sm:py-2 rounded-lg hover:bg-[#2A2B2D] transition-colors"
+            aria-label="Start Quiz Mode"
           >
             <Trophy className="w-3 h-3 sm:w-4 sm:h-4 text-yellow-500" />
             <span className="text-xs sm:text-sm font-medium hidden sm:inline">Quiz Mode</span>
           </button>
+
+          {isFormatSupported(language) && (
+            <button
+              onClick={handleFormat}
+              className="flex items-center gap-1 sm:gap-2 text-gray-400 hover:text-white px-2 sm:px-3 py-1 sm:py-2 rounded-lg hover:bg-[#2A2B2D] transition-colors"
+              title="Format Code"
+              aria-label="Format Code"
+            >
+              <Wand2 className="w-3 h-3 sm:w-4 sm:h-4 text-purple-400" />
+              <span className="text-xs sm:text-sm font-medium hidden sm:inline">Format</span>
+            </button>
+          )}
+
           <div className="h-4 sm:h-6 w-px bg-[#333]"></div>
           <button
             id="run-button"
             onClick={runCode}
             disabled={isRunning}
             className="flex items-center gap-1 sm:gap-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white px-3 sm:px-5 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium shadow-lg hover:shadow-purple-900/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Run Code"
           >
             {isRunning ? <Loader2 className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" /> : <Play className="w-3 h-3 sm:w-4 sm:h-4 fill-current" />}
             <span className="hidden sm:inline">Run</span>
@@ -1353,11 +880,26 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
       {/* Content Container for Resizing */}
       <div className="flex-1 flex flex-col min-h-0 relative" ref={editorContentRef}>
         {/* Code Area (Resizable Top) */}
-        <div style={{ height: `${verticalSplit}%` }} className="relative group bg-[#1E1E1E]">
+        <div style={{ height: `${verticalSplit}% ` }} className="relative group bg-[#1E1E1E]">
           <MonacoEditor
-            code={code}
-            language={language}
-            onChange={setCode}
+            code={files[activeFile] || ''}
+            language={(() => {
+              const ext = activeFile.split('.').pop()?.toLowerCase();
+              switch (ext) {
+                case 'js': return 'javascript';
+                case 'jsx': return 'javascript'; // Monaco handles JSX in JS mode
+                case 'ts': return 'typescript';
+                case 'tsx': return 'typescript';
+                case 'css': return 'css';
+                case 'html': return 'html';
+                case 'json': return 'json';
+                case 'py': return 'python';
+                case 'java': return 'java';
+                case 'cpp': return 'cpp';
+                default: return language; // Fallback to project language
+              }
+            })()}
+            onChange={(newCode) => setFiles(prev => ({ ...prev, [activeFile]: newCode }))}
           />
         </div>
 
@@ -1376,12 +918,12 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
           {language === 'react' ? (
             <BrowserPreview srcDoc={reactSrcDoc} keyProp={renderKey} />
           ) : ['nodejs', 'mongodb'].includes(language) ? (
-            <CommandPrompt lines={output} language={language} onInput={handleShellCommand} isProcessing={isRunning} />
+            <ConsolePanel lines={output} language={language} onInput={handleShellCommand} isProcessing={isRunning} />
           ) : (
             <div className="flex-1 p-6 font-mono text-sm overflow-y-auto text-[#9CA3AF]">
               {output.length > 0 ? (
                 output.map((line, i) => (
-                  <div key={i} className={`mb-1 ${line.startsWith('Error') ? 'text-red-400' : 'text-gray-300'}`}>
+                  <div key={i} className={`mb - 1 ${line.startsWith('Error') ? 'text-red-400' : 'text-gray-300'} `}>
                     {line}
                   </div>
                 ))
@@ -1396,225 +938,29 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
   );
 
   const renderQuiz = () => (
-    <div className="flex-1 bg-[#1E1E1E] p-8 flex flex-col items-center justify-center overflow-y-auto">
-      <div className="max-w-2xl w-full">
-        <div className="flex items-center justify-between mb-8">
-          <h2 className="text-2xl font-semibold text-white flex items-center gap-3">
-            <Trophy className="w-6 h-6 text-yellow-500" />
-            <span>Skill Assessment</span>
-          </h2>
-          <button
-            onClick={() => setViewMode('editor')}
-            className="px-6 py-2 bg-red-500/20 hover:bg-red-500/30 border-2 border-red-500/50 hover:border-red-500 text-red-400 hover:text-red-300 rounded-lg font-semibold transition-all hover:scale-105"
-          >
-            Exit Quiz
-          </button>
-        </div>
-
-        {quizQuestions.length === 0 ? (
-          <div className="text-center bg-[#2A2B2D] p-8 rounded-2xl border border-[#333]">
-            {/* Difficulty Selection */}
-            <div className="mb-4">
-              <h3 className="text-lg text-white font-semibold mb-3">Choose difficulty</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {(['beginner', 'intermediate', 'advanced'] as const).map((id) => (
-                  <button
-                    key={id}
-                    onClick={() => { setQuizDifficulty(id); setHasSelectedDifficulty(true); }}
-                    className={`w-full px-4 py-3 rounded-lg text-sm font-medium transition-colors ${quizDifficulty === id
-                      ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white'
-                      : 'bg-[#1E1E1E] text-gray-300 hover:bg-[#333]'
-                      }`}
-                  >
-                    {id.charAt(0).toUpperCase() + id.slice(1)}
-                  </button>
-                ))}
-              </div>
-              <button
-                disabled={!hasSelectedDifficulty || isGeneratingQuiz}
-                onClick={async () => {
-                  setIsGeneratingQuiz(true);
-                  await generateQuiz(quizDifficulty);
-                  setIsGeneratingQuiz(false);
-                }}
-                className={`mt-4 w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${hasSelectedDifficulty && !isGeneratingQuiz
-                  ? 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white'
-                  : 'bg-[#1E1E1E] text-gray-500 border border-[#333] cursor-not-allowed'
-                  }`}
-              >
-                {isGeneratingQuiz ? 'Preparing…' : `Start ${quizDifficulty.charAt(0).toUpperCase() + quizDifficulty.slice(1)} Quiz`}
-              </button>
-            </div>
-            {isGeneratingQuiz ? (
-              <div className="mt-2 flex items-center justify-center gap-2 text-gray-400">
-                <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
-                <span className="text-sm">Generating {quizDifficulty} questions…</span>
-              </div>
-            ) : (
-              <p className="text-gray-400 text-sm">Select a level and press Start.</p>
-            )}
-          </div>
-        ) : quizQuestions.length > 0 && currentQuizIndex < quizQuestions.length ? (
-          <div className="bg-[#2A2B2D] p-8 rounded-2xl border border-[#333] shadow-xl max-h-[70vh] overflow-y-auto">
-            <div className="mb-6">
-              <span className="text-xs font-bold tracking-widest text-blue-400 uppercase">Question {currentQuizIndex + 1}/{quizQuestions.length}</span>
-              <div className="mt-3 max-h-[40vh] overflow-y-auto pr-2">
-                <MarkdownText content={quizQuestions[currentQuizIndex].question} />
-              </div>
-            </div>
-            <div className="space-y-3">
-              {quizQuestions[currentQuizIndex].options.map((opt, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => {
-                    // Store user's answer
-                    setQuizAnswers(prev => [...prev, idx]);
-
-                    // Update score if correct
-                    if (idx === quizQuestions[currentQuizIndex].correctIndex) {
-                      setQuizScore(s => s + 1);
-                    }
-
-                    // Move to next question
-                    setCurrentQuizIndex(i => i + 1);
-                  }}
-                  className="w-full text-left p-4 rounded-xl bg-[#1E1E1E] hover:bg-[#333] text-gray-300 hover:text-white transition-all border border-transparent hover:border-gray-500"
-                >
-                  {opt}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="bg-[#2A2B2D] rounded-2xl border border-[#333] overflow-hidden">
-            {/* Quiz Review Section */}
-            <div className="p-8 max-h-[80vh] overflow-y-auto">
-              {/* Header with Inline Score Card */}
-              <div className="flex items-start justify-between gap-6 mb-8">
-                <div className="flex-1">
-                  <h3 className="text-3xl font-bold text-white mb-2">Answer Review</h3>
-                  <p className="text-gray-400">Review your answers and learn from the correct solutions</p>
-                </div>
-
-                {/* Compact Score Card */}
-                <div className="flex-shrink-0 bg-gradient-to-br from-[#1E1F20] to-[#2A2B2D] border-2 border-[#333] rounded-xl shadow-xl p-4 min-w-[200px]">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center">
-                      <Flame className="w-5 h-5 text-white" />
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-400 uppercase tracking-wider font-bold">Quiz Complete</div>
-                      <div className="text-lg font-bold text-white">{quizScore}/{quizQuestions.length}</div>
-                    </div>
-                  </div>
-                  <div className={`text-center px-3 py-2 rounded-lg ${(quizScore / quizQuestions.length) >= 0.8 ? 'bg-green-500/20 text-green-400' :
-                    (quizScore / quizQuestions.length) >= 0.6 ? 'bg-blue-500/20 text-blue-400' :
-                      'bg-red-500/20 text-red-400'
-                    }`}>
-                    <div className="text-2xl font-bold">{Math.round((quizScore / quizQuestions.length) * 100)}%</div>
-                    <div className="text-xs opacity-80">Score</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                {quizQuestions.map((q, qIdx) => {
-                  const userAnswer = quizAnswers[qIdx];
-                  const isCorrect = userAnswer === q.correctIndex;
-
-                  return (
-                    <div key={qIdx} className="rounded-xl bg-[#1E1E1E] border-2 border-[#333] overflow-hidden hover:border-[#444] transition-colors">
-                      {/* Question Header */}
-                      <div className={`p-4 border-b-2 ${isCorrect ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
-                        <div className="flex items-center gap-3">
-                          <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${isCorrect
-                            ? 'bg-green-500 text-white'
-                            : 'bg-red-500 text-white'
-                            }`}>
-                            {isCorrect ? '✓' : '✗'}
-                          </div>
-                          <div>
-                            <div className="text-xs uppercase font-bold tracking-wider text-gray-400">Question {qIdx + 1}</div>
-                            <div className={`text-sm font-semibold ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
-                              {isCorrect ? 'Correct Answer' : 'Incorrect Answer'}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Question Content */}
-                      <div className="p-6">
-                        <div className="mb-6 text-base leading-relaxed">
-                          <MarkdownText content={q.question} />
-                        </div>
-
-                        {/* Answer Options */}
-                        <div className="space-y-3">
-                          {q.options.map((opt, optIdx) => {
-                            const isUserAnswer = userAnswer === optIdx;
-                            const isCorrectAnswer = q.correctIndex === optIdx;
-
-                            return (
-                              <div
-                                key={optIdx}
-                                className={`relative p-4 rounded-lg border-2 transition-all ${isCorrectAnswer
-                                  ? 'bg-green-500/10 border-green-500 shadow-lg shadow-green-500/20'
-                                  : isUserAnswer
-                                    ? 'bg-red-500/10 border-red-500 shadow-lg shadow-red-500/20'
-                                    : 'bg-[#131314] border-[#2A2B2D]'
-                                  }`}
-                              >
-                                <div className="flex items-start gap-3">
-                                  {/* Option Letter */}
-                                  <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${isCorrectAnswer
-                                    ? 'bg-green-500 text-white'
-                                    : isUserAnswer
-                                      ? 'bg-red-500 text-white'
-                                      : 'bg-[#2A2B2D] text-gray-400'
-                                    }`}>
-                                    {String.fromCharCode(65 + optIdx)}
-                                  </div>
-
-                                  {/* Option Content */}
-                                  <div className="flex-1">
-                                    <div className={`font-medium ${isCorrectAnswer
-                                      ? 'text-green-200'
-                                      : isUserAnswer
-                                        ? 'text-red-200'
-                                        : 'text-gray-300'
-                                      }`}>
-                                      {opt}
-                                    </div>
-
-                                    {/* Status Labels */}
-                                    {isCorrectAnswer && (
-                                      <div className="mt-2 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-green-500/20 text-green-400 text-xs font-bold">
-                                        <span>✓</span>
-                                        <span>CORRECT ANSWER</span>
-                                      </div>
-                                    )}
-                                    {isUserAnswer && !isCorrectAnswer && (
-                                      <div className="mt-2 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-red-500/20 text-red-400 text-xs font-bold">
-                                        <span>✗</span>
-                                        <span>YOUR ANSWER</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+    <QuizPanel
+      questions={quizQuestions}
+      currentIndex={currentQuizIndex}
+      score={quizScore}
+      answers={quizAnswers}
+      difficulty={quizDifficulty}
+      isGenerating={isGeneratingQuiz}
+      hasSelectedDifficulty={hasSelectedDifficulty}
+      onDifficultySelect={(diff) => { setQuizDifficulty(diff); setHasSelectedDifficulty(true); }}
+      onStartQuiz={async () => {
+        setIsGeneratingQuiz(true);
+        await generateQuiz(quizDifficulty);
+        setIsGeneratingQuiz(false);
+      }}
+      onAnswer={(idx) => {
+        setQuizAnswers(prev => [...prev, idx]);
+        if (idx === quizQuestions[currentQuizIndex].correctIndex) {
+          setQuizScore(s => s + 1);
+        }
+        setCurrentQuizIndex(i => i + 1);
+      }}
+      onExit={() => setViewMode('editor')}
+    />
   );
 
   // Handle language change with navigation
@@ -1646,8 +992,32 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         </div>
 
         {/* Right Panel (Editor/Lab) */}
+        {/* Right Panel (Editor/Lab) */}
         <div className={`flex-1 min-w-0 min-h-0 overflow-hidden ${resizingDir === 'horizontal' ? 'pointer-events-none select-none' : ''}`}>
-          {viewMode === 'editor' ? renderEditor() : renderQuiz()}
+          {viewMode === 'editor' ? (
+            <div className="flex h-full w-full" key={language}>
+              {(language === 'react' || language === 'nodejs') && (
+                <FileExplorer
+                  files={files}
+                  activeFile={activeFile}
+                  onFileSelect={setActiveFile}
+                  onFileCreate={(name) => {
+                    setFiles(prev => ({ ...prev, [name]: '' }));
+                    setActiveFile(name);
+                  }}
+                  onFileDelete={(name) => {
+                    const newFiles = { ...files };
+                    delete newFiles[name];
+                    setFiles(newFiles);
+                    if (activeFile === name) {
+                      setActiveFile(Object.keys(newFiles)[0] || '');
+                    }
+                  }}
+                />
+              )}
+              {renderEditor()}
+            </div>
+          ) : renderQuiz()}
         </div>
       </div>
 
@@ -1662,7 +1032,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
           <div className={`absolute inset-0 ${mobileTab === 'code' ? 'block' : 'hidden'}`}>
             {renderEditor()}
           </div>
-          <div className={`absolute inset-0 ${mobileTab === 'output' ? 'block' : 'hidden'}`}>
+          <div className={`absolute inset - 0 ${mobileTab === 'output' ? 'block' : 'hidden'} `}>
             <div className="h-full flex flex-col bg-[#1E1E1E]">
               {/* Output Header */}
               <div className="h-14 border-b border-[#333] flex items-center justify-between px-4 bg-[#131314] shrink-0">
@@ -1706,24 +1076,21 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
         <div className="h-16 border-t border-[#333] bg-[#131314] flex items-center justify-around shrink-0 z-30">
           <button
             onClick={() => setMobileTab('code')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors ${mobileTab === 'code' ? 'text-blue-400' : 'text-gray-500'
-              }`}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors ${mobileTab === 'code' ? 'text-blue-400' : 'text-gray-500'}`}
           >
             <Code2 className="w-5 h-5" />
             <span className="text-xs font-medium">Code</span>
           </button>
           <button
             onClick={() => setMobileTab('output')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors ${mobileTab === 'output' ? 'text-blue-400' : 'text-gray-500'
-              }`}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors ${mobileTab === 'output' ? 'text-blue-400' : 'text-gray-500'}`}
           >
             <Terminal className="w-5 h-5" />
             <span className="text-xs font-medium">Output</span>
           </button>
           <button
             onClick={() => setMobileTab('chat')}
-            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors ${mobileTab === 'chat' ? 'text-blue-400' : 'text-gray-500'
-              }`}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors ${mobileTab === 'chat' ? 'text-blue-400' : 'text-gray-500'}`}
           >
             <MessageSquare className="w-5 h-5" />
             <span className="text-xs font-medium">Chat</span>
