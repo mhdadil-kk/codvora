@@ -472,6 +472,7 @@ function CodeEditor({ initialLanguage, navigate }: { initialLanguage: Language, 
           clearTimeout(timeoutId);
         } else if (type === 'done') {
           setIsRunning(false);
+          clearTimeout(timeoutId);
         }
       };
 
